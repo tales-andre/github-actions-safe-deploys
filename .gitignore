@@ -1,0 +1,14 @@
+# Throwaway cluster kubeconfig written by scripts/kind-up.sh
+.kind/
+
+# Terraform working files (the lock file in infra/ is kept on purpose)
+.terraform/
+.terraform-plugin-cache/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+infra/aws-oidc/.terraform.lock.hcl
+infra/gcp-wif/.terraform.lock.hcl
+
+node_modules/

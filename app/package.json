@@ -1,0 +1,16 @@
+{
+  "name": "kettlebird-hello",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal HTTP service used to demonstrate the deploy pipeline. No dependencies.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "license": "MIT"
+}
