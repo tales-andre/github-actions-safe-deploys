@@ -1,10 +1,11 @@
 name: deploy
 
-# Reusable: put one image digest into one environment.
+# Reusable within this repository: put one image digest into one environment. It runs this
+# repository's scripts/ and deploy/k8s/, so another repository cannot call it as it is.
 # - The job runs in the GitHub environment of the same name, so production waits for its
 #   required reviewer before anything happens.
 # - A concurrency lock per environment: two deploys to the same place never overlap; a
-#   second one waits for the first to finish.
+#   second one waits for the first to finish (a newer one replaces any that is still waiting).
 # - The AWS and Google Cloud logins use short-lived OIDC tokens and run only when the
 #   repository (or environment) variables exist. Without them they are skipped.
 # - The demo target is a throwaway kind cluster created in the job. In your own account,

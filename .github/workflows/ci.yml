@@ -78,11 +78,12 @@ jobs:
         with:
           terraform_version: "1.11.3"
           terraform_wrapper: false
+      - name: Create the provider cache folder
+        run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
       - name: Format
         run: terraform fmt -check -recursive
       - name: Validate each module
         run: |
-          mkdir -p "$TF_PLUGIN_CACHE_DIR"
           for module in infra/aws-oidc infra/gcp-wif; do
             terraform -chdir="$module" init -backend=false -input=false
             terraform -chdir="$module" validate

@@ -1,8 +1,9 @@
-# syntax=docker/dockerfile:1
-
-# Base: distroless Node.js 22 (no shell, no package manager). The tag is rebuilt upstream
-# when Debian ships security fixes, and every build is scanned by Trivy in build.yml.
-# For bit-for-bit reproducible builds, pin the digest instead and let Dependabot bump it.
+# No "# syntax=" line: the build uses the Dockerfile frontend built into BuildKit, so no
+# frontend image is pulled by a moving tag (scripts/check-pins.sh rejects an unpinned one).
+#
+# Base: distroless Node.js 22 (no shell, no package manager). This is a tag on purpose: it is
+# rebuilt upstream when Debian ships security fixes, and every build is scanned by Trivy in
+# build.yml. For bit-for-bit reproducible builds, pin the digest instead.
 ARG BASE_IMAGE=gcr.io/distroless/nodejs22-debian13:nonroot
 
 # Stage 1: run the unit tests on the same Node.js that ships. If a test fails, no image exists.

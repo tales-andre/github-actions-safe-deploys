@@ -153,3 +153,42 @@ run "rejects_owner_or_editor_for_a_deploy_account" {
 
   expect_failures = [var.project_roles]
 }
+
+run "roles_bind_only_to_the_named_environment" {
+  command = apply
+
+  module {
+    source = "./gcp-wif"
+  }
+
+  variables {
+    project_roles = {
+      production = ["roles/run.developer"]
+    }
+  }
+
+  assert {
+    condition = (
+      keys(google_project_iam_member.deploy) == ["production/roles/run.developer"] &&
+      google_project_iam_member.deploy["production/roles/run.developer"].role == "roles/run.developer" &&
+      google_project_iam_member.deploy["production/roles/run.developer"].member == "serviceAccount:${google_service_account.deploy["production"].email}"
+    )
+    error_message = "The role must go to the production service account only."
+  }
+}
+
+run "rejects_roles_for_an_unknown_environment" {
+  command = plan
+
+  module {
+    source = "./gcp-wif"
+  }
+
+  variables {
+    project_roles = {
+      qa = ["roles/run.developer"]
+    }
+  }
+
+  expect_failures = [google_project_iam_member.deploy]
+}
