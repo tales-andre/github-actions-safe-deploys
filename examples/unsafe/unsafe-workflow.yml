@@ -1,0 +1,34 @@
+# DELIBERATELY UNSAFE. Do not copy. It sits outside .github/workflows, so GitHub never runs it.
+# gates.yml checks that actionlint, zizmor and scripts/check-no-static-keys.sh all reject it.
+# KETTLEBIRD_CLOUD_KEY is a made-up secret name; no such secret exists.
+name: unsafe deploy (example only)
+
+on:
+  # Runs with the base repository's secrets and a write token, even for a pull request from a fork.
+  pull_request_target:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # A token with every scope, write included.
+    permissions: write-all
+    steps:
+      # A moving tag, not a commit: whoever controls the tag controls this step.
+      - uses: actions/checkout@v4
+        with:
+          # Checks out the fork's code and then runs it with the secrets below.
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # The pull request title is pasted into the shell: a title like "$(curl ...)" runs.
+      - name: Announce
+        run: echo "Deploying ${{ github.event.pull_request.title }}"
+
+      # A long-lived cloud key stored in GitHub secrets.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ vars.KETTLEBIRD_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.KETTLEBIRD_CLOUD_KEY }}
+          aws-region: us-east-1
+
+      - name: Deploy whatever the fork contains
+        run: ./scripts/deploy.sh production latest

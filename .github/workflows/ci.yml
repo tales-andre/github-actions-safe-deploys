@@ -1,0 +1,96 @@
+name: ci
+
+# Every pull request and every push to main. Read-only token and no secrets, so a pull
+# request from a fork can run all of it safely (pull_request, never pull_request_target).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  app:
+    name: App tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Unit tests
+        working-directory: app
+        run: npm test
+
+  image:
+    name: Image
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read # build and scan only; nothing is pushed from a pull request
+    with:
+      push: false
+
+  workflows:
+    name: Workflow lint and pins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Actions pinned to commits, tool images pinned by digest
+        run: scripts/check-pins.sh
+      - name: actionlint and zizmor on .github/workflows
+        env:
+          GH_TOKEN: ${{ github.token }} # zizmor's online audits (read-only API calls)
+        run: scripts/lint-workflows.sh
+
+  terraform:
+    name: Terraform (mocked providers)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.11.3"
+          terraform_wrapper: false
+      - name: Format
+        run: terraform fmt -check -recursive
+      - name: Validate each module
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          for module in infra/aws-oidc infra/gcp-wif; do
+            terraform -chdir="$module" init -backend=false -input=false
+            terraform -chdir="$module" validate
+          done
+      - name: Test (mock_provider, no cloud account, nothing created)
+        run: |
+          terraform -chdir=infra init -backend=false -input=false
+          terraform -chdir=infra validate
+          terraform -chdir=infra test
+      - name: No long-lived cloud keys in Terraform or workflows
+        run: scripts/check-no-static-keys.sh

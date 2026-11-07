@@ -1,0 +1,6 @@
+rules:
+  # zizmor 1.30+ suggests GitHub's newer "$/..." self-repository syntax for local reusable
+  # workflows. actionlint 1.7.12 (latest at the time of writing) rejects that syntax, so the
+  # workflows keep "./..." until actionlint supports it. Every other audit stays on.
+  self-repository:
+    disable: true

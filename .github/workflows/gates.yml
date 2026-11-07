@@ -1,0 +1,75 @@
+name: gates
+
+# Negative tests. Each job tries something that must be stopped and goes green only when
+# it is stopped, for the expected reason:
+#   - a known-vulnerable image, built through build.yml, is blocked by Trivy before any push;
+#   - a broken release never replaces the running one, and rollback puts the previous digest back;
+#   - the unsafe workflow in examples/unsafe/ is rejected by actionlint, zizmor and the key check.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  vulnerable-image:
+    name: Trivy blocks a vulnerable image
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+    with:
+      context: examples/vulnerable-image
+      push: false
+      expect-blocked: true
+
+  broken-release:
+    name: A broken release rolls back
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install kind
+        run: scripts/install-kind.sh
+      # One job from start to end: a kind cluster does not survive between jobs.
+      - name: Throwaway cluster with a local registry
+        run: scripts/kind-up.sh --local-registry
+      - name: Good release, broken release, rollback
+        run: scripts/gate-broken-release.sh
+      - name: Cluster state (on failure)
+        if: failure()
+        run: |
+          kubectl --kubeconfig .kind/kubeconfig get all -A || true
+          kubectl --kubeconfig .kind/kubeconfig -n production describe deployment hello || true
+      - name: Delete the cluster
+        if: always()
+        run: scripts/kind-down.sh
+
+  unsafe-example:
+    name: Linters reject the unsafe example
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint, zizmor and the key check must all fail on it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/gate-unsafe-example.sh
