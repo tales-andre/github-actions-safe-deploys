@@ -60,7 +60,8 @@ digest_of() {
     printf 'cannot read %s: %s\n' "$1" "$out" >&2
     return 1
   fi
-  digest="$(sed -n 's/.*"digest":"\(sha256:[a-f0-9]\{64\}\)".*/\1/p' <<<"$out" | head -n 1)"
+  # The first "digest" in the (whitespace-free) JSON is the top-level one, even for a list.
+  digest="$(tr -d ' \n\r' <<<"$out" | grep -o '"digest":"sha256:[a-f0-9]\{64\}"' | head -n 1 | cut -d '"' -f 4)"
   [ -n "$digest" ] || { printf 'no digest in the answer for %s\n' "$1" >&2; return 1; }
   printf '%s\n' "$digest"
 }

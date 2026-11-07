@@ -2,7 +2,8 @@
 # After a successful deploy, remembers what each environment runs, as registry tags:
 #   <image>:<env>           the digest now running
 #   <image>:<env>-previous  the digest it ran before (what rollback.yml puts back)
-# Tags are only pointers: no image is rebuilt or re-pushed, the digests stay the same.
+# Tags are only pointers: no image is rebuilt, and --prefer-index=false makes buildx copy the
+# manifest as it is (by default it wraps a single manifest in a new list, with a new digest).
 #
 #   scripts/record-release.sh <registry/name> <staging|production> <sha256:digest>
 #
@@ -26,8 +27,8 @@ case "$status" in
 esac
 
 if [ -n "$current" ] && [ "$current" != "$digest" ]; then
-  docker buildx imagetools create --tag "$image:$environment-previous" "$image@$current"
+  docker buildx imagetools create --prefer-index=false --tag "$image:$environment-previous" "$image@$current"
   log "$environment-previous -> $current"
 fi
-docker buildx imagetools create --tag "$image:$environment" "$image@$digest"
+docker buildx imagetools create --prefer-index=false --tag "$image:$environment" "$image@$digest"
 log "$environment -> $digest"
