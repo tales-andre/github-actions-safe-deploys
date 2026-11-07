@@ -1,0 +1,55 @@
+name: release
+
+# Staging, then production after a person approves, with the same image digest.
+# Runs on a v* tag or by hand, never on every push (each run would leave an approval waiting).
+#
+#   build   -> one image, scanned, pushed once; its digest is the release
+#   staging -> that digest, deployed and smoke-tested
+#   production -> waits for the required reviewer, then the same digest
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: write # push the scanned image to GHCR
+    with:
+      push: true
+      version: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+
+  staging:
+    name: Staging
+    needs: build
+    uses: ./.github/workflows/deploy.yml
+    permissions: # what deploy.yml needs
+      actions: read # check the environment's protection rules
+      contents: read # manifests and scripts
+      packages: write # pull the image, move the <env> tags
+      id-token: write # OIDC login, only when configured
+    with:
+      environment: staging
+      image: ${{ needs.build.outputs.image }}
+      digest: ${{ needs.build.outputs.digest }}
+
+  production:
+    name: Production
+    needs: [build, staging]
+    uses: ./.github/workflows/deploy.yml
+    permissions: # what deploy.yml needs
+      actions: read # check the environment's protection rules
+      contents: read # manifests and scripts
+      packages: write # pull the image, move the <env> tags
+      id-token: write # OIDC login, only when configured
+    with:
+      environment: production
+      require-reviewer: true
+      image: ${{ needs.build.outputs.image }}
+      digest: ${{ needs.build.outputs.digest }}

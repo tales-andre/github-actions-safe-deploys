@@ -1,0 +1,86 @@
+name: rollback
+
+# One step back: deploys the digest an environment ran before its last deploy (the
+# <env>-previous tag kept by scripts/record-release.sh), or a digest you paste in.
+# Nothing is rebuilt. Production still waits for its required reviewer.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to roll back.
+        type: choice
+        options: [production, staging]
+        default: production
+        required: true
+      digest:
+        description: Optional digest to put back (sha256:...). Empty means the one that ran before the last deploy.
+        type: string
+        default: ""
+        required: false
+
+permissions: {}
+
+# One rollback per environment at a time (the deploy itself also takes the deploy-<env> lock).
+concurrency:
+  group: rollback-${{ inputs.environment }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  resolve:
+    name: Find the digest to put back
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read # read the <env>-previous tag
+    outputs:
+      image: ${{ steps.pick.outputs.image }}
+      digest: ${{ steps.pick.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pick the digest
+        id: pick
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          REQUESTED: ${{ inputs.digest }}
+          REPOSITORY: ${{ github.repository }}
+          REGISTRY_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          image="ghcr.io/${REPOSITORY,,}"
+          if [ -n "$REQUESTED" ]; then
+            [[ "$REQUESTED" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::digest must be sha256:<64 hex>"; exit 1; }
+            digest="$REQUESTED"
+          else
+            printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+            digest="$(scripts/previous-digest.sh "$image" "$ENVIRONMENT")"
+            docker logout ghcr.io
+          fi
+          echo "Rolling $ENVIRONMENT back to $image@$digest"
+          {
+            echo "image=$image"
+            echo "digest=$digest"
+          } >>"$GITHUB_OUTPUT"
+
+  rollback:
+    name: Roll back
+    needs: resolve
+    uses: ./.github/workflows/deploy.yml
+    permissions: # what deploy.yml needs
+      actions: read # check the environment's protection rules
+      contents: read # manifests and scripts
+      packages: write # pull the image, move the <env> tags
+      id-token: write # OIDC login, only when configured
+    with:
+      environment: ${{ inputs.environment }}
+      require-reviewer: ${{ inputs.environment == 'production' }}
+      image: ${{ needs.resolve.outputs.image }}
+      digest: ${{ needs.resolve.outputs.digest }}

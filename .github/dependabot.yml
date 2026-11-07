@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Bumps the commit SHAs (and the version comments) of the pinned actions.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Provider versions in infra/.terraform.lock.hcl, used by terraform test.
+  - package-ecosystem: terraform
+    directory: /infra
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

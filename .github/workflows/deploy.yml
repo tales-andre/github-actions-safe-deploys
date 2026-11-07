@@ -1,0 +1,169 @@
+name: deploy
+
+# Reusable: put one image digest into one environment.
+# - The job runs in the GitHub environment of the same name, so production waits for its
+#   required reviewer before anything happens.
+# - A concurrency lock per environment: two deploys to the same place never overlap; a
+#   second one waits for the first to finish.
+# - The AWS and Google Cloud logins use short-lived OIDC tokens and run only when the
+#   repository (or environment) variables exist. Without them they are skipped.
+# - The demo target is a throwaway kind cluster created in the job. In your own account,
+#   replace "Create the throwaway cluster" with the step that fetches your cluster's credentials.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: staging or production.
+        type: string
+        required: true
+      image:
+        description: Image name without tag, e.g. ghcr.io/owner/repo.
+        type: string
+        required: true
+      digest:
+        description: The digest to deploy (sha256:...).
+        type: string
+        required: true
+      require-reviewer:
+        description: Refuse to run unless the environment has a required reviewer.
+        type: boolean
+        default: false
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  guard:
+    name: Check ${{ inputs.environment }} protection
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read # read the environment's protection rules
+    steps:
+      - name: The environment must have a required reviewer
+        if: inputs.require-reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          rules="$(gh api "repos/$REPOSITORY/environments/$ENVIRONMENT" --jq '[.protection_rules[]?.type] | join(",")' 2>/dev/null || true)"
+          case ",$rules," in
+            *,required_reviewers,*) echo "$ENVIRONMENT has a required reviewer." ;;
+            *)
+              echo "::error::The $ENVIRONMENT environment has no required reviewer. Add one in Settings > Environments > $ENVIRONMENT before releasing (see the README)."
+              exit 1
+              ;;
+          esac
+
+      - name: No reviewer required here
+        if: ${{ !inputs.require-reviewer }}
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: echo "$ENVIRONMENT deploys without an approval step."
+
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    needs: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read # the manifests and scripts in this repository
+      packages: write # pull the image, then move the <env> and <env>-previous tags
+      id-token: write # OIDC token for the AWS and Google Cloud logins (only used when configured)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the inputs
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE: ${{ inputs.image }}
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          [[ "$ENVIRONMENT" =~ ^(staging|production)$ ]] || { echo "::error::unknown environment '$ENVIRONMENT'"; exit 1; }
+          [[ "$IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+$ ]] || { echo "::error::image must be ghcr.io/<owner>/<name> without a tag"; exit 1; }
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::digest must be sha256:<64 hex>"; exit 1; }
+
+      - name: Log in to AWS with OIDC (skipped without AWS_ROLE_ARN)
+        if: vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: github-deploy-${{ github.run_id }}
+
+      - name: Show the AWS identity
+        if: vars.AWS_ROLE_ARN != ''
+        run: aws sts get-caller-identity
+
+      - name: Log in to Google Cloud with Workload Identity Federation (skipped without GCP_WORKLOAD_IDENTITY_PROVIDER)
+        if: vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Install kind
+        run: scripts/install-kind.sh
+
+      # Demo target. In your account, after the login above, use instead:
+      #   aws eks update-kubeconfig --name <cluster> --kubeconfig .kind/kubeconfig
+      #   or google-github-actions/get-gke-credentials
+      - name: Create the throwaway cluster
+        run: scripts/kind-up.sh
+
+      - name: Log in to GHCR
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      - name: Deploy the digest
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE: ${{ inputs.image }}
+          DIGEST: ${{ inputs.digest }}
+          # The GHCR package may be private: the cluster pulls with this job's short-lived token.
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        run: scripts/deploy.sh "$ENVIRONMENT" "$IMAGE@$DIGEST"
+
+      - name: Smoke test
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          DIGEST: ${{ inputs.digest }}
+        run: scripts/smoke.sh "$ENVIRONMENT" "$DIGEST"
+
+      - name: Record what runs here (rollback.yml reads it)
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE: ${{ inputs.image }}
+          DIGEST: ${{ inputs.digest }}
+        run: scripts/record-release.sh "$IMAGE" "$ENVIRONMENT" "$DIGEST"
+
+      - name: Summary
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE: ${{ inputs.image }}
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          {
+            echo "### Deployed to $ENVIRONMENT"
+            echo
+            echo "\`$IMAGE@$DIGEST\`"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io

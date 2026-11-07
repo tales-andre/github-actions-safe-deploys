@@ -1,0 +1,145 @@
+name: build
+
+# Reusable: build an image once, scan it with Trivy, and push it to GHCR only if the scan
+# passes. Returns the digest; every later step deploys that digest, never a rebuild.
+#
+# Call it from any repository:
+#   uses: tales-andre/github-actions-safe-deploys/.github/workflows/build.yml@<commit SHA>
+#
+# No permissions block on purpose: a called workflow gets at most what the caller grants.
+# ci.yml and gates.yml grant read-only (build and scan, no push); release.yml grants
+# packages: write so the scanned image can be pushed.
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: Docker build context.
+        type: string
+        default: app
+      dockerfile:
+        description: Path to the Dockerfile. Default <context>/Dockerfile.
+        type: string
+        default: ""
+      image:
+        description: Image name without tag. Default ghcr.io/<owner>/<repo>.
+        type: string
+        default: ""
+      version:
+        description: Baked into the image as APP_VERSION and used as the tag. Default the first 12 characters of the commit SHA.
+        type: string
+        default: ""
+      push:
+        description: Push to GHCR after a clean scan. Needs packages write from the caller.
+        type: boolean
+        default: false
+      expect-blocked:
+        description: Negative test only (gates.yml). The job passes only if Trivy blocks the image; nothing is pushed either way.
+        type: boolean
+        default: false
+    outputs:
+      image:
+        description: Image name without tag.
+        value: ${{ jobs.build.outputs.image }}
+      digest:
+        description: Digest of the pushed image (sha256:...). Empty when push is false.
+        value: ${{ jobs.build.outputs.digest }}
+      version:
+        description: Version baked into the image.
+        value: ${{ jobs.build.outputs.version }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build once, scan, push by digest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+      version: ${{ steps.build.outputs.version }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the image once
+        id: build
+        env:
+          CONTEXT: ${{ inputs.context }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          IMAGE_INPUT: ${{ inputs.image }}
+          VERSION_INPUT: ${{ inputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          image="${IMAGE_INPUT:-ghcr.io/$REPOSITORY}"
+          image="${image,,}" # registries want lowercase names
+          version="${VERSION_INPUT:-${GITHUB_SHA::12}}"
+          [[ "$version" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || { echo "::error::version '$version' is not a valid image tag"; exit 1; }
+          docker build \
+            --file "${DOCKERFILE:-$CONTEXT/Dockerfile}" \
+            --build-arg "APP_VERSION=$version" \
+            --label "org.opencontainers.image.source=$SOURCE_URL" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$version" \
+            --tag "$image:$version" \
+            "$CONTEXT"
+          {
+            echo "image=$image"
+            echo "version=$version"
+            echo "ref=$image:$version"
+          } >>"$GITHUB_OUTPUT"
+
+      # Same scanner image and flags as scripts/scan-image.sh; scripts/check-pins.sh keeps the pin in sync.
+      - name: Scan with Trivy (blocks fixable CRITICAL and HIGH)
+        id: scan
+        continue-on-error: ${{ inputs.expect-blocked }}
+        env:
+          REF: ${{ steps.build.outputs.ref }}
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb \
+            image --exit-code 1 --ignore-unfixed --severity CRITICAL,HIGH --scanners vuln --no-progress "$REF" \
+            | tee "$RUNNER_TEMP/trivy.txt"
+
+      - name: Confirm Trivy blocked the image (negative test)
+        if: inputs.expect-blocked
+        env:
+          OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::Trivy let a known-vulnerable image through"
+            exit 1
+          fi
+          grep -Eq 'Total: [1-9]' "$RUNNER_TEMP/trivy.txt" || { echo "::error::Trivy failed, but not because of vulnerabilities"; exit 1; }
+          echo "Blocked as expected: $(grep -E 'Total: [1-9]' "$RUNNER_TEMP/trivy.txt" | head -n 1). Nothing was pushed."
+
+      - name: Push to GHCR and read the digest
+        id: push
+        if: inputs.push && steps.scan.outcome == 'success'
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          REF: ${{ steps.build.outputs.ref }}
+          REGISTRY_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          [[ "$IMAGE" == ghcr.io/* ]] || { echo "::error::push is set up for ghcr.io only, got $IMAGE"; exit 1; }
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          docker push --quiet "$REF"
+          docker logout ghcr.io
+          digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$REF" | sed -n "s|^${IMAGE}@||p" | head -n 1)"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::no digest after push"; exit 1; }
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+          {
+            echo "### Image built once"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Image | \`$IMAGE\` |"
+            echo "| Digest | \`$digest\` |"
+            echo "| Trivy | no fixable CRITICAL or HIGH |"
+          } >>"$GITHUB_STEP_SUMMARY"
