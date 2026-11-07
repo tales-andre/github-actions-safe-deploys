@@ -18,9 +18,11 @@ Google Cloud parts are written and tested offline, but have never run against a 
   (actionlint and zizmor) and the Terraform tests run on every pull request. The token is read-only and the
   workflows use no secrets, so a pull request from a fork can run all of it and has nothing to steal. They use
   `pull_request`, never `pull_request_target`.
-- **Each job gets only the permissions it needs, and nothing can change under the pipeline.** Every workflow
-  starts from `permissions: {}`. Every external action is pinned to a full commit SHA, with its release in a
-  comment, and every tool image is pinned by digest. `scripts/check-pins.sh` fails CI if one is not.
+- **Each job gets only the permissions it needs, and nothing can change under the pipeline.** The workflows
+  start from `permissions: {}` and each job asks for what it uses. The reusable `build.yml` has no permissions
+  block on purpose: it gets only what its caller grants, read-only from pull requests and package write from a
+  release. Every external action is pinned to a full commit SHA, with its release in a comment, and every tool
+  image is pinned by digest. `scripts/check-pins.sh` fails CI if one is not.
 - **The image is built once and promoted by its digest.** `build.yml` builds, scans and pushes one image and
   returns its digest (`sha256:...`). Staging and production both deploy `name@sha256:...`; nothing is rebuilt for
   production. `deploy.sh` refuses a plain tag, and the smoke test checks that every ready pod runs that digest.

@@ -51,7 +51,11 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          rules="$(gh api "repos/$REPOSITORY/environments/$ENVIRONMENT" --jq '[.protection_rules[]?.type] | join(",")' 2>/dev/null || true)"
+          if ! answer="$(gh api "repos/$REPOSITORY/environments/$ENVIRONMENT" 2>&1)"; then
+            echo "::error::Could not read the $ENVIRONMENT environment ($answer). Create it in Settings > Environments with a required reviewer (see the README)."
+            exit 1
+          fi
+          rules="$(jq -r '[.protection_rules[]?.type] | join(",")' <<<"$answer")"
           case ",$rules," in
             *,required_reviewers,*) echo "$ENVIRONMENT has a required reviewer." ;;
             *)
