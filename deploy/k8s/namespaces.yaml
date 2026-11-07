@@ -1,0 +1,17 @@
+# Applied once per cluster by scripts/kind-up.sh. Pod Security Admission rejects any pod
+# that does not meet the "restricted" profile (non-root, no privilege escalation, and so on).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
