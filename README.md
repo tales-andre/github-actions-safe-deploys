@@ -3,7 +3,7 @@
 [![ci](https://github.com/tales-andre/github-actions-safe-deploys/actions/workflows/ci.yml/badge.svg)](https://github.com/tales-andre/github-actions-safe-deploys/actions/workflows/ci.yml)
 [![gates](https://github.com/tales-andre/github-actions-safe-deploys/actions/workflows/gates.yml/badge.svg)](https://github.com/tales-andre/github-actions-safe-deploys/actions/workflows/gates.yml)
 
-**A common request on freelance job boards:** a small startup deploys by hand from someone's laptop, or from a
+**The problem:** a small startup deploys by hand from someone's laptop, or from a
 pipeline that keeps a long-lived cloud access key in the repository's GitHub secrets. They want every pull request
 tested, the exact image that passed the tests to be the one that reaches production, a person to approve each
 production release, and a quick way back when a release goes wrong.
